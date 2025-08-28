@@ -4,10 +4,11 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Psalms.AspNetCore.MultiTenant.Context;
 using Psalms.AspNetCore.MultiTenant.Enums;
+using Psalms.AspNetCore.MultiTenant.Models;
 
 namespace Psalms.AspNetCore.MultiTenant.Middlewares;
 
-public class PsalmsTenantMiddleware(RequestDelegate next)
+public class PsalmsTenantMiddleware<TenantModel>(RequestDelegate next) where TenantModel : class, ITenantModelBase
 {
     public async Task InvokeAsync(HttpContext context)
     { 
@@ -20,20 +21,21 @@ public class PsalmsTenantMiddleware(RequestDelegate next)
         }
 
         using var scope = context.RequestServices.CreateScope();
-        var tenantDb    = scope.ServiceProvider.GetRequiredService<PsalmsTenantDbContext>();
+        var tenantDb    = scope.ServiceProvider.GetRequiredService<IPsalmsTenantDbContext<TenantModel>>();
         var memory      = scope.ServiceProvider.GetRequiredService<IMemoryCache>();
 
-        var dbName = (await tenantDb.Tenants.AsNoTracking()
-                    .FirstOrDefaultAsync(x => x.Id == int.Parse(tenantIdClaim)))?.DatabaseName;
+        var tenant = await tenantDb.Tenants.AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.Id == int.Parse(tenantIdClaim));
 
-        if (dbName == null)
+        if (tenant == null)
         {
             context.Response.StatusCode = 403;
             await context.Response.WriteAsync("Tenant id not founded.");
             return;
         }
 
-        memory.Set(TenantInfo.DatabaseName, dbName);
+        memory.Set(TenantInfo.DatabaseName, tenant.DatabaseName);
+        memory.Set(TenantInfo.Tenant, tenant);
 
         await next(context);
     }
