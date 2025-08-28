@@ -3,5 +3,6 @@
 public enum TenantInfo
 {
     TenantId,
-    DatabaseName
+    DatabaseName,
+    Tenant
 }
