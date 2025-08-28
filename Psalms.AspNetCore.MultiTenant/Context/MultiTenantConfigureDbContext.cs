@@ -10,10 +10,10 @@ public class MultiTenantConfigureDbContext : DbContext
 {
     public MultiTenantConfigureDbContext(DbContextOptions options, IMemoryCache cache, IConfiguration config) : base(options)
     {
-        Database.SetConnectionString(PsalmsTenantService.GetDbConnectionString
+        Database.SetConnectionString(PsalmsDatabase.GetDbConnectionString
             (
-                config, 
-                cache.Get<string>(TenantInfo.DatabaseName) ?? throw new Exception("Database name not found in cache"))
-            );
-    }
+                config,
+                cache.Get<string>(TenantInfo.DatabaseName)! 
+            ));
+    }   
 }
