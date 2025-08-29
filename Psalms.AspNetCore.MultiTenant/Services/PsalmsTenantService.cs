@@ -18,10 +18,29 @@ public class PsalmsTenantService<Tenant>(IPsalmsTenantDbContext<Tenant> tenantCo
         await tenantContext.Tenants.AddAsync(tenant);
         await tenantContext.ApplyChangesAsync();
 
+        await SetConnectionStringAsync(tenant);
+       
+        await Appcontext.Database.MigrateAsync();
+    }
+    public async Task DeleteTenantByAsync(Expression<Func<Tenant, bool>> predicate)
+    {
+        var tenant = await GetTenantByAsync(predicate)
+            ?? throw new Exception("Unable to find tenant to delete");
+
+        tenantContext.Tenants.Remove(tenant);
+        await tenantContext.ApplyChangesAsync();
+
+        await SetConnectionStringAsync(tenant);
+
+        await Appcontext.Database.EnsureDeletedAsync();
+    }
+    private Task SetConnectionStringAsync(Tenant tenant)
+    {
         var connectionString = PsalmsDatabase.GetDbConnectionString(config, tenant.DatabaseName);
 
         Appcontext.Database.SetConnectionString(connectionString);
-        await Appcontext.Database.MigrateAsync();
+
+        return Task.CompletedTask;
     }
     #endregion
 }
