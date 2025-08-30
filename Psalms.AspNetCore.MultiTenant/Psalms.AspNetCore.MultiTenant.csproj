@@ -1,15 +1,28 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
+	<PropertyGroup>
+		<TargetFramework>net9.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.0" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.8" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.8" />
-  </ItemGroup>
+		<PackageId>Psalms.AspNetCore.MultiTenant</PackageId>
+		<Version>1.0.0</Version>
+		<Authors>PsalmsLibrary</Authors>
+		<Company>PsalmsLibrary</Company>
+		<Description>
+			Library for ASP.NET Core that implements multi-tenant per database: each client has its own database,
+			automatically resolved via middleware and integrated with EF Core.
+		</Description>
+		<PackageTags>aspnet;multitenant;C#</PackageTags>
+		<RepositoryUrl>https://github.com/PsalmsLibrary/Psalms.AspnetCore.MultiTenant</RepositoryUrl>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.0" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.8" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.8" />
+	</ItemGroup>
 
 </Project>
