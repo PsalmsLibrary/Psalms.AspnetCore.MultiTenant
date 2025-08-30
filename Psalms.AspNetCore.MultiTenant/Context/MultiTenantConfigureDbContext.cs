@@ -1,5 +1,5 @@
-﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
+﻿using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Psalms.AspNetCore.MultiTenant.Enums;
 using Psalms.AspNetCore.MultiTenant.Services;
@@ -20,12 +20,11 @@ public class MultiTenantConfigureDbContext : DbContext
     /// <param name="options">The options for configuring the DbContext.</param>
     /// <param name="cache">The memory cache used to retrieve tenant information.</param>
     /// <param name="config">The configuration source for database settings.</param>
-    public MultiTenantConfigureDbContext(DbContextOptions options, IMemoryCache cache, IConfiguration config) : base(options)
+    public MultiTenantConfigureDbContext(DbContextOptions options, IHttpContextAccessor accessor, IConfiguration config) : base(options)
     {
-        Database.SetConnectionString(PsalmsDatabase.GetDbConnectionStringBase
-            (
-                config,
-                cache.Get<string>(TenantInfo.DatabaseName)!
-            ));
+        var dbName = accessor.HttpContext.Items[TenantInfo.DatabaseName];
+
+        if (dbName is not null)
+            Database.SetConnectionString(PsalmsDatabase.GetDbConnectionStringBase(config, dbName.ToString()!));
     }
 }

@@ -20,7 +20,6 @@ public static class PsalmsTenantExtension
 
         service.AddScoped<PsalmsTenantService<TenantModel>>();
 
-        service.AddMemoryCache();
         return service; 
     }
 }

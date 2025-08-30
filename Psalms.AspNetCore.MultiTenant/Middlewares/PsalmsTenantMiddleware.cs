@@ -1,6 +1,5 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Psalms.AspNetCore.MultiTenant.Context;
 using Psalms.AspNetCore.MultiTenant.Enums;
@@ -34,20 +33,19 @@ public class PsalmsTenantMiddleware<TenantModel>(RequestDelegate next) where Ten
 
         using var scope = context.RequestServices.CreateScope();
         var tenantDb = scope.ServiceProvider.GetRequiredService<IPsalmsTenantDbContext<TenantModel>>();
-        var memory = scope.ServiceProvider.GetRequiredService<IMemoryCache>();
 
         var tenant = await tenantDb.Tenants.AsNoTracking()
-                    .FirstOrDefaultAsync(x => x.Id == int.Parse(tenantIdClaim));
+            .FirstOrDefaultAsync(x => x.Id == tenantId);
 
         if (tenant == null)
         {
             context.Response.StatusCode = 403;
-            await context.Response.WriteAsync("Tenant id not founded.");
+            await context.Response.WriteAsync("Tenant not found.");
             return;
         }
 
-        memory.Set(TenantInfo.DatabaseName, tenant.DatabaseName);
-        memory.Set(TenantInfo.Tenant, tenant);
+        context.Items[TenantInfo.Tenant] = tenant;
+        context.Items[TenantInfo.DatabaseName] = tenant.DatabaseName;
 
         await next(context);
     }
