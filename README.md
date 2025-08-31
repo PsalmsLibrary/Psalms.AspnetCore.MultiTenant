@@ -1,44 +1,41 @@
 # Psalms.AspNetCore.MultiTenant
 
-A simple abstraction for **database-per-tenant multi-tenancy** (one database per client) in ASP.NET Core applications with EF Core.
+A lightweight library that adds **database-per-tenant multi-tenancy** to ASP.NET Core applications with Entity Framework Core.
 
-The library solves three central points:
+It handles three main concerns:
 
-1. **Tenant discovery** through a `Claim` on the authenticated user.
-2. **Dynamic switching** of your application `DbContext` connection string based on the current tenant.
-3. **Tenant database lifecycle** (creation with `Migrate`, removal with `EnsureDeleted`) through a dedicated service.
-
-> TL;DR: A middleware reads TenantId from claims, stores DatabaseName in cache, and your DbContext (which inherits from MultiTenantConfigureDbContext) switches the connection to the tenant’s database automatically.
-> 
+1. **Tenant resolution** – finds which tenant is making the request (based on claims).
+2. **Dynamic database switching** – your `DbContext` uses the right database per request.
+3. **Tenant lifecycle management** – create, migrate, and delete tenant databases easily.
 
 ---
 
-## Architecture overview
+## How it works (high-level)
 
 ```
-[Request] → [Auth] → [PsalmsTenantMiddleware]
-                         ↓
-                    IMemoryCache
-                         ↓
-           MultiTenantConfigureDbContext (AppDbContext)
-                         ↓
-                  Tenant Database (dynamic)
+[HTTP Request] → [Authentication] → [PsalmsTenantMiddleware]
+                                    ↓
+                              HttpContext.Items
+                                    ↓
+                   MultiTenantConfigureDbContext (your AppDbContext)
+                                    ↓
+                       Database of the current tenant
 
 ```
 
-- **Tenant model**: minimal (`Id`, `Name`, `Subdomain`, `DatabaseName`).
-- **Tenants context**: a `DbContext` just for the tenants table (the “catalog”).
-- **Application context**: your real `DbContext`, derived from `MultiTenantConfigureDbContext`, whose `ConnectionString` is defined at runtime based on the current tenant’s `DatabaseName`.
-- **Tenant service**: creates, fetches, and deletes tenants, running `Migrate`/`EnsureDeleted` on the application `DbContext`.
-- **Middleware**: resolves tenant from claims and fills the cache for the `DbContext` to use.
+- **Tenant model**: defines Id, Name, Subdomain, DatabaseName.
+- **Tenant catalog context**: keeps the registry of tenants in a shared database.
+- **Application context**: your actual app `DbContext`, derived from `MultiTenantConfigureDbContext`, that switches its connection string at runtime.
+- **Middleware**: extracts tenant info from the authenticated user and places it in `HttpContext.Items`.
+- **Service**: creates/removes tenants and manages their databases via migrations.
 
 ---
 
-## Components (what each class does)
+## Core components
 
 ### `ITenantModelBase`
 
-Minimal tenant contract.
+Defines the contract every tenant model must follow:
 
 ```csharp
 public interface ITenantModelBase
@@ -53,7 +50,7 @@ public interface ITenantModelBase
 
 ### `PsalmsTenantModel`
 
-Basic ready-to-use implementation of the contract above.
+A ready-to-use default tenant implementation.
 
 ```csharp
 public class PsalmsTenantModel : ITenantModelBase
@@ -68,150 +65,155 @@ public class PsalmsTenantModel : ITenantModelBase
 
 ### `IPsalmsTenantDbContext<TTenant>`
 
-Contract your **tenant catalog context** must implement.
+Contract for the **tenant catalog context**:
 
 ```csharp
 public interface IPsalmsTenantDbContext<TTenant> where TTenant : class, ITenantModelBase
 {
     DbSet<TTenant> Tenants { get; set; }
-    Task ApplyChangesAsync(); // normally: await SaveChangesAsync();
+    Task ApplyChangesAsync();
 }
 
 ```
 
 ### `MultiTenantConfigureDbContext`
 
-Base `DbContext` that reads the current tenant’s `DatabaseName` from cache and adjusts the `ConnectionString` dynamically.
-
-Your `AppDbContext` **must inherit** this class.
+Base `DbContext` that automatically switches connection strings per request.
 
 ```csharp
 public class MultiTenantConfigureDbContext : DbContext
 {
-    public MultiTenantConfigureDbContext(
-        DbContextOptions options,
-        IMemoryCache cache,
-        IConfiguration config) : base(options)
+    public MultiTenantConfigureDbContext(DbContextOptions options, IHttpContextAccessor accessor, IConfiguration config)
+        : base(options)
     {
-        var dbName = cache.Get<string>(TenantInfo.DatabaseName)!;
-        var conn   = PsalmsDatabase.GetDbConnectionString(config, dbName);
-        Database.SetConnectionString(conn);
+        var dbName = accessor.HttpContext.Items[TenantInfo.DatabaseName];
+        if (dbName != null)
+            Database.SetConnectionString(PsalmsDatabase.GetDbConnectionStringBase(config, dbName.ToString()!));
     }
 }
 
 ```
 
-> Important: this context depends on PsalmsTenantMiddleware having populated the cache within the same request before the context is instantiated/first used.
-> 
+Your **AppDbContext** should inherit from this.
 
 ### `PsalmsTenantMiddleware<TTenant>`
 
 Middleware that:
 
-1. Reads **`TenantId`** from the authenticated user’s claims.
-2. Loads the tenant into the **catalog context** (`IPsalmsTenantDbContext<TTenant>`).
-3. Stores the tenant and its `DatabaseName` in `IMemoryCache`.
-
-If no tenant claim is present, the request continues, but the application `DbContext` won’t be able to define its connection (see *Pipeline order*).
+1. Reads the `TenantId` claim from the user.
+2. Resolves the tenant from the catalog (`IPsalmsTenantDbContext`).
+3. Places `DatabaseName` in `HttpContext.Items` for the DbContext to pick up.
 
 ### `PsalmsTenantService<TTenant>`
 
-Utility service for the tenant database lifecycle:
+Handles tenant management:
 
-- `GetTenantByAsync(...)`: query by expression.
-- `CreateTenantAsync(tenant)`: saves to catalog, sets `AppDbContext` connection, and executes `Database.MigrateAsync()`.
-- `DeleteTenantByAsync(predicate)`: removes from catalog, sets connection, and executes `Database.EnsureDeletedAsync()`.
+- `GetTenantByAsync` → retrieve tenants by condition.
+- `CreateTenantAsync` → saves tenant, sets connection string, runs migrations.
+- `DeleteTenantByAsync` → removes tenant, deletes its database.
 
-> On creation, your AppDbContext migrations run on the tenant’s database; on deletion, the tenant database is dropped.
-> 
+### `PsalmsDatabase`
 
-### `PsalmsTenantExtension.AddPsalmsMultiTenant(...)`
-
-Extension method to register **everything** in DI: the two contexts (catalog and application), `PsalmsTenantService`, and `IMemoryCache`.
-
----
-
-## Requirements
-
-- ASP.NET Core + EF Core.
-- Compatible DB provider (e.g., SQLite, SQL Server). Examples below use **SQLite**.
-
----
-
-## Step by step (Quick setup)
-
-### 1) Define the **tenant model** (optional)
-
-You can use `PsalmsTenantModel` directly or create your own model implementing `ITenantModelBase`.
+Helper that builds the tenant-specific connection string:
 
 ```csharp
-public class TenantModel : PsalmsTenantModel {}
+public static string GetDbConnectionStringBase(IConfiguration config, string databaseName)
+    => string.Format(config["DbConnectionBase"] ?? throw new Exception("Missing base connection"), databaseName);
 
 ```
 
-### 2) Create the **Tenants catalog context**
+### `PsalmsTenantExtension.AddPsalmsMultiTenant`
 
-Implement `IPsalmsTenantDbContext<TenantModel>`.
+Extension method to register everything in DI:
 
 ```csharp
-public class TenantContext : DbContext, IPsalmsTenantDbContext<TenantModel>
-{
-    public TenantContext(DbContextOptions<TenantContext> options) : base(options) {}
+builder.Services.AddPsalmsMultiTenant<TenantModel, TenantContext, AppDbContext>(
+    contextConfiguration, builder.Configuration);
 
-    public DbSet<TenantModel> Tenants { get; set; } = null!;
+```
+
+---
+
+## Setup guide
+
+### 1) Define a tenant model
+
+Use the provided `PsalmsTenantModel` or create your own:
+
+```csharp
+public class Tenant : PsalmsTenantModel {}
+
+```
+
+### 2) Create the tenant catalog context
+
+```csharp
+public class TenantCatalog : DbContext, IPsalmsTenantDbContext<Tenant>
+{
+    public TenantCatalog(DbContextOptions<TenantCatalog> options) : base(options) {}
+
+    public DbSet<Tenant> Tenants { get; set; } = null!;
 
     public Task ApplyChangesAsync() => SaveChangesAsync();
 }
 
 ```
 
-### 3) Create your **application DbContext**, inheriting from `MultiTenantConfigureDbContext`
+### 3) Create your application DbContext
+
+Inherit from `MultiTenantConfigureDbContext`:
 
 ```csharp
 public class AppDbContext : MultiTenantConfigureDbContext
 {
-    public AppDbContext(
-        DbContextOptions<AppDbContext> options,
-        IMemoryCache cache,
-        IConfiguration config) : base(options, cache, config) { }
+    public AppDbContext(DbContextOptions<AppDbContext> options, IHttpContextAccessor accessor, IConfiguration config)
+        : base(options, accessor, config) { }
 
-    // Your entities
     public DbSet<Product> Products => Set<Product>();
 }
 
 ```
 
-> Migrations: Point MigrationsAssembly to your API project (or wherever migrations live), as that’s what will be applied to each tenant.
-> 
+### 4) Implement context configuration
 
-### 4) Register services in `Program.cs`
+You must provide a configuration class that implements `IPsalmsContextConfiguration`:
 
 ```csharp
-builder.Services.AddPsalmsMultiTenant<TenantModel, TenantContext, AppDbContext>(
-    tenantOptions: x => x.UseSqlite(
-        PsalmsDatabase.GetDbConnectionString(builder.Configuration, "Tenants"),
-        x => x.MigrationsAssembly("YourProject")
-    ),
-    appContextOptions: x => x.UseSqlite(
-        x => x.MigrationsAssembly("YourProject")
-    )
-);
+public class DbContextConfig : IPsalmsContextConfiguration
+{
+    public Action<DbContextOptionsBuilder> TenantContextConfig(IConfiguration config)
+        => options => options.UseSqlite
+        (
+	        PsalmsDatabase.GetDbConnectionString(config, "dbName"),
+	        x => MigrationsAssembly("YourAssembly")
+        );
+
+    public Action<DbContextOptionsBuilder> AppContextConfig()
+        => options => options.UseSqlite(x => MigrationsAssembly("YourAssembly"));
+}
 
 ```
 
-### 5) Configure the **pipeline** (order matters!)
+### 5) Register services in Program.cs
+
+```csharp
+builder.Services.AddPsalmsMultiTenant<Tenant, TenantCatalog, AppDbContext>(
+    new DbContextConfig(), builder.Configuration);
+
+```
+
+### 6) Add middleware to the pipeline
 
 ```csharp
 app.UseAuthentication();
-app.UseMiddleware<PsalmsTenantMiddleware<TenantModel>>(); // before Authorization and before using AppDbContext
+app.UseMiddleware<PsalmsTenantMiddleware<Tenant>>();
 app.UseAuthorization();
 
 ```
 
-> Ensure any code using AppDbContext runs after the tenant middleware, so DatabaseName is in cache when the context is instantiated/first used.
-> 
+Make sure the middleware runs **before** you resolve `AppDbContext`.
 
-### 6) Configure base **connection string** in `appsettings.json`
+### 7) Configure base **connection string** in `appsettings.json`
 
 Example with SQLite:
 
@@ -228,7 +230,7 @@ Example with SQLite:
 > The helper PsalmsDatabase.GetDbConnectionString(config, databaseNameOrKey) will look up your config to build the connection string (e.g., using a {db} template). Adjust to your implementation. This helps avoid exposing sensitive info (passwords, DB location). You only need the DB name. 😊
 > 
 
-### 7) Authentication and **Tenant Claim**
+### 8) Authentication and **Tenant Claim**
 
 Middleware looks for the claim `TenantId` (name from `TenantInfo.TenantId.ToString()`). Ensure you **include this claim** in your user’s token (e.g., at login):
 
@@ -246,24 +248,23 @@ var claims = new List<Claim>
 
 ---
 
-## Using `PsalmsTenantService`
+---
 
-Create/fetch/delete tenants **and** manage tenant databases automatically.
+## Example controller
 
 ```csharp
 [ApiController]
 [Route("api/tenants")]
 public class TenantsController : ControllerBase
 {
-    private readonly PsalmsTenantService<TenantModel> _service;
+    private readonly PsalmsTenantService<Tenant> _service;
 
-    public TenantsController(PsalmsTenantService<TenantModel> service)
-        => _service = service;
+    public TenantsController(PsalmsTenantService<Tenant> service) => _service = service;
 
     [HttpPost]
     public async Task<IActionResult> Create(CreateTenantDto dto)
     {
-        var tenant = new TenantModel
+        var tenant = new Tenant
         {
             Name = dto.Name,
             Subdomain = dto.Subdomain,
@@ -271,14 +272,7 @@ public class TenantsController : ControllerBase
         };
 
         await _service.CreateTenantAsync(tenant);
-        return CreatedAtAction(nameof(Get), new { id = tenant.Id }, tenant);
-    }
-
-    [HttpGet("{id:int}")]
-    public async Task<IActionResult> Get(int id)
-    {
-        var t = await _service.GetTenantByAsync(x => x.Id == id);
-        return t is null ? NotFound() : Ok(t);
+        return Ok(tenant);
     }
 
     [HttpDelete("{id:int}")]
@@ -291,61 +285,30 @@ public class TenantsController : ControllerBase
 
 ```
 
-- **CreateTenantAsync**: adds tenant to catalog → sets AppDbContext connection to tenant DB → runs `MigrateAsync()`.
-- **DeleteTenantByAsync**: removes tenant from catalog → sets connection → runs `EnsureDeletedAsync()` (drops tenant DB).
+---
 
-> Tip: you can call CreateTenantAsync during customer onboarding to guarantee their DB starts migrated.
+## Key notes & best practices
+
+- **DbContext pooling**: avoid `AddDbContextPool` for the app context; it may leak tenant connections.
+- **Tenant resolution**: requires a `TenantId` claim in the authenticated user.
+- **Migrations**: keep migrations in your app project; they’ll run automatically per tenant.
+- **Scaling**: designed for small to medium number of tenants; thousands of databases may require different approaches.
+- **Seeding**: after `CreateTenantAsync`, you can seed tenant-specific data.
+
+---
+
+## TL;DR
+
+This library:
+
+- Resolves tenant from claims.
+- Switches EF Core database connection per request.
+- Provides a service to create/delete tenant databases.
+
+> In short: one API, many clients, each with its own isolated database – no extra boilerplate.
 > 
 
----
-
-## Best practices, tips, and notes
-
-- **Pipeline order**: tenant middleware must run **before** any AppDbContext usage.
-- **Concurrency**: strategy uses `IMemoryCache` to share `DatabaseName` within request. For heavy multi-tenant concurrency, consider `IHttpContextAccessor + HttpContext.Items`, `AsyncLocal<T>`, or another request-scoped storage.
-- **Migrations**: keep AppDbContext migrations in the correct assembly and configure `MigrationsAssembly(...)`.
-- **Providers**: swap `UseSqlite(...)` for `UseSqlServer(...)` (or others) as needed.
-- **Validation**: handle missing/blocked `TenantId` with `403`/`404` in middleware or global filters.
-- **Per-tenant seeding**: after `CreateTenantAsync`, run tenant-specific seed data if needed.
-
----
-
-## Full example (minimal)
-
-```csharp
-// Program.cs
-var builder = WebApplication.CreateBuilder(args);
-
-builder.Services.AddControllers();
-
-builder.Services.AddPsalmsMultiTenant<TenantModel, TenantContext, AppDbContext>(
-    x => x.UseSqlite(
-        PsalmsDatabase.GetDbConnectionString(builder.Configuration, "Tenants"),
-        x => x.MigrationsAssembly("MyApi")
-    ),
-    x => x.UseSqlite(
-        x => x.MigrationsAssembly("MyApi")
-    )
-);
-
-var app = builder.Build();
-
-app.UseAuthentication();
-app.UseMiddleware<PsalmsTenantMiddleware<TenantModel>>();
-app.UseAuthorization();
-
-app.MapControllers();
-app.Run();
-
-```
-
----
-
 ## FAQ
-
-**Q. Can I have multiple tenants in the same request?**
-
-No, that’s not the library’s goal. Middleware expects **one** TenantId claim.
 
 **Q. Where do tenant connection strings live?**
 
