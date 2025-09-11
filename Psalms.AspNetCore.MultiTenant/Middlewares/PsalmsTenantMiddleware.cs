@@ -1,9 +1,11 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Psalms.AspNetCore.MultiTenant.Context;
 using Psalms.AspNetCore.MultiTenant.Enums;
 using Psalms.AspNetCore.MultiTenant.Models;
+using Psalms.AspNetCore.MultiTenant.Services;
 
 namespace Psalms.AspNetCore.MultiTenant.Middlewares;
 
@@ -12,7 +14,9 @@ namespace Psalms.AspNetCore.MultiTenant.Middlewares;
 /// based on the authenticated user's claims in a multi-tenant application.
 /// </summary>
 /// <typeparam name="TenantModel">The tenant entity type, which must implement <see cref="ITenantModelBase"/>.</typeparam>
-public class PsalmsTenantMiddleware<TenantModel>(RequestDelegate next) where TenantModel : class, ITenantModelBase
+public class PsalmsTenantMiddleware<TenantModel, AppContext>(RequestDelegate next)
+    where TenantModel : class, ITenantModelBase
+    where AppContext : DbContext
 {
     /// <summary>
     /// Processes the HTTP request to resolve the tenant from user claims,
@@ -31,8 +35,9 @@ public class PsalmsTenantMiddleware<TenantModel>(RequestDelegate next) where Ten
             return;
         }
 
-        using var scope = context.RequestServices.CreateScope();
-        var tenantDb = scope.ServiceProvider.GetRequiredService<IPsalmsTenantDbContext<TenantModel>>();
+        var tenantDb = context.RequestServices.GetRequiredService<IPsalmsTenantDbContext<TenantModel>>();
+        var appDb    = context.RequestServices.GetRequiredService<AppContext>();
+        var config   = context.RequestServices.GetRequiredService<IConfiguration>();
 
         var tenant = await tenantDb.Tenants.AsNoTracking()
             .FirstOrDefaultAsync(x => x.Id == tenantId);
@@ -44,9 +49,8 @@ public class PsalmsTenantMiddleware<TenantModel>(RequestDelegate next) where Ten
             return;
         }
 
-        context.Items[TenantInfo.Tenant] = tenant;
-        context.Items[TenantInfo.DatabaseName] = tenant.DatabaseName;
-
+        appDb.Database.SetConnectionString(PsalmsDatabase.GetDbConnectionStringBase(config, tenant.Name));
+       
         await next(context);
     }
 }

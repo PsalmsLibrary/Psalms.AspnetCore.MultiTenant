@@ -12,8 +12,9 @@ namespace Psalms.AspNetCore.MultiTenant.Services;
 /// database connection string configuration and migration handling.
 /// </summary>
 /// <typeparam name="Tenant">The tenant entity type, which must implement <see cref="ITenantModelBase"/>.</typeparam>
-public class PsalmsTenantService<Tenant>(IPsalmsTenantDbContext<Tenant> tenantContext, IConfiguration config, MultiTenantConfigureDbContext Appcontext)
+public class PsalmsTenantService<Tenant,AppDbContext>(IPsalmsTenantDbContext<Tenant> tenantContext, IConfiguration config, AppDbContext Appcontext)
     where Tenant : class, ITenantModelBase
+    where AppDbContext : DbContext
 {
     #region IPsalmsTenantService Methods
 
