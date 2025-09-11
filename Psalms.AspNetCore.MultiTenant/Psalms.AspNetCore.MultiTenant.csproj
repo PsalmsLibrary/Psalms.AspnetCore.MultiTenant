@@ -6,7 +6,7 @@
 		<Nullable>enable</Nullable>
 
 		<PackageId>Psalms.AspNetCore.MultiTenant</PackageId>
-		<Version>1.0.0</Version>
+		<Version>3.0.0</Version>
 		<Authors>PsalmsLibrary</Authors>
 		<Company>PsalmsLibrary</Company>
 		<Description>
