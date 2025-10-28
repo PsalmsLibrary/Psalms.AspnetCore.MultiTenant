@@ -49,7 +49,7 @@ public class PsalmsTenantMiddleware<TenantModel, AppContext>(RequestDelegate nex
             return;
         }
 
-        appDb.Database.SetConnectionString(PsalmsDatabase.GetDbConnectionStringBase(config, tenant.Name));
+        appDb.Database.SetConnectionString(PsalmsDatabase.GetDbConnectionStringBase(config, tenant.DatabaseName));
        
         await next(context);
     }
